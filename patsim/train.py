@@ -58,7 +58,7 @@ def compute_loss(out, batch, cfg):
         terms["mask"] += F.binary_cross_entropy_with_logits(o["mask_logit"].float(), target_mask) / 2
         terms["cls"] += F.cross_entropy(o["cls_logit"].float(), batch[f"breed_{s}"]) / 2
     total = sum(getattr(cfg, f"w_{k}") * v for k, v in terms.items())
-    return total, {k: float(v) for k, v in terms.items()}
+    return total, {k: float(v.detach()) for k, v in terms.items()}
 
 
 def save_checkpoint(path, model, cfg, classes, history):
@@ -111,11 +111,11 @@ def train(cfg: Config, train_bank=None, test_bank=None, device=None):
         sched.step()
 
         if step % cfg.log_every == 0:
-            print(f"step {step:5d}  loss {float(loss):.3f}  "
+            print(f"step {step:5d}  loss {float(loss.detach()):.3f}  "
                   + "  ".join(f"{k} {v:.3f}" for k, v in parts.items()) + f"  ({time.time() - t0:.0f}s)")
         if step % cfg.eval_every == 0 or step == cfg.steps:
             metrics = evaluate(model, test_synth, cfg.eval_pairs)
-            history.append({"step": step, "loss": float(loss), **metrics})
+            history.append({"step": step, "loss": float(loss.detach()), **metrics})
             print("  eval  " + "  ".join(f"{k} {v:.3f}" for k, v in metrics.items()))
             save_checkpoint(ckpt, model, cfg, train_bank.classes, history)
     return model, history
