@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "patsim"
+version = "0.1.0"
+description = "Learned pattern / location / scale similarity between two 2D images"
+requires-python = ">=3.9"
+dependencies = ["torch>=2.3", "torchvision>=0.18", "numpy", "pillow>=9.1", "matplotlib", "tqdm"]
+
+[tool.setuptools]
+packages = ["patsim"]

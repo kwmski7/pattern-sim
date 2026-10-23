@@ -1,0 +1,7 @@
+torch>=2.3
+torchvision>=0.18
+numpy
+pillow>=9.1
+matplotlib
+tqdm
+pytest
