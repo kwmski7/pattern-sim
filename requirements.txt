@@ -4,4 +4,8 @@ numpy
 pillow>=9.1
 matplotlib
 tqdm
+pandas
 pytest
+xarray
+zarr>=3
+gcsfs

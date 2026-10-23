@@ -1,112 +1,112 @@
 # pattern-sim
 
-A deep-learning similarity measure for two 2D images that separates **what** is in them from
-**where** and **how big** it is.
+Learned similarity between two 2D fields that keeps **what** the pattern is apart from **where**,
+**how big**, **how rotated** and **how intense** it is.
 
-| output | meaning | identical images |
+* **`precipsim/`**: precipitation forecast vs. observation, with no objects or bounding boxes. This is the main package.
+  Notebook: [`notebooks/colab_precip.ipynb`](notebooks/colab_precip.ipynb)
+* **`patsim/`**: the first prototype, on cat/dog photos with per-image object boxes.
+  Notebook: [`notebooks/colab_train.ipynb`](notebooks/colab_train.ipynb)
+
+## precipsim
+
+| output | meaning | perfect forecast |
 |---|---|---|
-| `pattern` | same thing? (default targets: same animal 1, same breed 0.75, same species 0.4, cat vs dog 0) | 1 |
-| `location` | `1 / (1 + d/d0)`, `d` = distance between object centres as a fraction of image size, `d0 = 0.1` | 1 |
-| `scale` | `exp(-|log(size_B/size_A)|)` = smaller / larger | 1 |
-| `overall` | geometric mean of the three | 1 |
-| `dx, dy, scale_ratio` | raw displacement and size ratio of B relative to A | 0, 0, 1 |
+| `pattern` | correlation of smoothed log rain **after** shift/size/rotation/amount errors are removed | 1 |
+| `location` | `1 / (1 + d/d0)`, `d` = shift as a fraction of the domain, `d0 = 0.1` | 1 |
+| `scale` | smaller / larger size | 1 |
+| `rotation` | `1 / (1 + angle/20°)` | 1 |
+| `intensity` | smaller / larger rain amount | 1 |
+| `overall` | geometric mean of the five | 1 |
+| `shift_east/north` (grid pts, `shift_km`), `scale_ratio`, `rotation_deg` (ccw), `intensity_ratio` | the estimated errors themselves | 0, 1, 0, 1 |
+| `unc_shift`, `unc_scale_pct`, `unc_rotation_deg` | the network's expected error of those estimates | |
+| `corr_raw`, `centroid_*`, `amount_ratio` | classical references: gridpoint correlation and SAL-style moments | |
 
-Examples: the same cat moved from top-left to bottom-right keeps `pattern ≈ 1` while `location`
-falls to ~0.15; a dog at the cat's place keeps `location ≈ 1` with low `pattern`; the same cat at
-twice the size gives `scale ≈ 0.5`.
-
-[Open the notebook in Colab](https://colab.research.google.com/github/YOUR_GITHUB_ID/pattern-sim/blob/main/notebooks/colab_train.ipynb)
-(replace `YOUR_GITHUB_ID` once the repo is on GitHub).
-
-## How it works
+### How it works
 
 ```
- image A ─┐                       ┌─ mask head ─► soft object mask ─► mask-pooled features ─► embedding e_A
-          ├─ shared ResNet-18 ─► F├─ heat head ─► soft-argmax ───────► centre c_A (x, y)
- image B ─┘  (layer3 + layer4,    └─ size head ─────────────────────► log size s_A
-              stride 16)
- pattern  = sigmoid(a · cos(e_A, e_B) + b)        (embedding pooled over the object only → blind to position/size)
- location = 1 / (1 + |c_B − c_A| / d0)            (soft-argmax → moves exactly with the object)
- scale    = exp(−|s_B − s_A|)
+ obs A ──┐                                        ┌─► shift, zoom, rotation (+ uncertainty)
+         ├─ shared ResNet-18 ─► all-pairs feature ┤
+ fcst B ─┘   (stride 8)         correlation       └─► move B back onto A ─► compare CNN ─► pattern, amount ratio
 ```
 
-The three scores come from different parts of the network, so the pattern score is not affected
-by position or size, and location and size are measured for each image separately (so a dog can still
-be "in the same place" as a cat).
+1. **Registration:** every location in A's feature map is correlated with every location in B's. A small
+   CNN turns that correlation volume into the similarity transform from A to B (in the style of Rocco et al. 2017,
+   *CNN architecture for geometric matching*). At inference, one extra pass refines it.
+2. **Comparison:** B is warped back by that transform, and a second CNN compares it with A to give the
+   pattern score and the rain-amount ratio.
 
-### Training data (Oxford-IIIT Pet, downloaded automatically)
+There is no notion of an "object", so typhoons, fronts and scattered convection are handled the same way.
 
-[Oxford-IIIT Pet](https://www.robots.ox.ac.uk/~vgg/data/pets/) has 7,349 photos of 37 cat and dog breeds, each with
-a pixel mask of the animal. Each photo becomes a square RGBA tile (alpha = mask). At every
-training step a fresh batch of pairs is **rendered on the GPU** (`patsim/data.py: PairSynth`):
+### Training data: self-supervised, exact labels
 
-* partner: same photo / same breed / same species / other species (30/25/20/25 %) → pattern target
-* geometry of B: identical to A / small jitter / independent (20/30/50 %), sizes 25–70 % of the image
-* each image either a cut-out on a random procedural background, or inside its original photo
-* shared random mirroring, brightness/contrast jitter, noise
+`FieldPairSynth` takes a real field (ERA5 by default, or your own observations) and does the following:
 
-Because the code does the shifting and resizing itself, the location and size labels are exact. The
-network is trained with BCE on the pattern target, L1 on centres, smooth-L1 on log size, plus
-auxiliary mask and breed losses. Evaluation uses a fixed set of pairs from the **test** split
-(animals never seen in training).
+* **Observation A:** a 128 × 128 crop. **Forecast B:** the same field seen through a random known
+  shift (≤ 25 % of the domain), zoom (0.7–1.4), rotation (±40°) and amount factor (0.5–2). Rain that
+  moves into view comes from the real surrounding field.
+* **Forecast-like errors of random strength:** smooth warping, part of the pattern replaced, a changed
+  intensity distribution, smoothing, spurious and missing cells, and noise. 25 % of pairs use an unrelated
+  date and place as the forecast.
+* **Labels:** the transform and amount factor are exact. The pattern target is the correlation
+  between B and A moved by the exact transform.
 
-## Run it
+The network is trained with smooth-L1 on the transform and amount, a Laplace NLL for the uncertainty, and BCE on
+the pattern. Evaluation uses a held-out year and compares the network with a **brute-force classical
+registration** (zoom/rotation grid + phase correlation) and **SAL-style moments** (`precipsim/classic.py`).
 
-**Colab (recommended):** open `notebooks/colab_train.ipynb`, choose a T4 GPU runtime, set
-`GITHUB_USER`, run all. Downloading and preprocessing take a few minutes, and 6,000 training steps take roughly 15–20 min.
-Tiles and checkpoints are cached in Google Drive.
+### Data
 
-**Locally / CLI:**
+ERA5 hourly total precipitation from Google's public ARCO-ERA5 store
+(`gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3`, no login), 0–60°N,
+90–180°E, May–October, 00/06/12/18 UTC. Train on 2016–2022, test on 2023.
+
+### Use
+
+```python
+from precipsim import FieldScorer
+scorer = FieldScorer.from_checkpoint("runs/precip/precipsim.pt")
+r = scorer.score(obs, fcst, accum_hours=1, grid_km=12)   # 2D arrays, same grid, row 0 = north
+r["pattern"], r["location"], r["shift_km"], r["rotation_deg"], r["intensity_ratio"]
+scorer.score_batch(obs_stack, fcst_stack)                  # many cases at once -> arrays
+```
+
+To adapt to your own grid (radar, GPM, KIM), use `FieldBank.from_array(obs_mmh, time=...)` and then `train(...)`.
+No labels are needed.
+
+### Limitations
+
+* Rotation and zoom are ill-defined for round or scattered rain. The uncertainty outputs show this.
+* A single global transform is estimated. If two systems move differently, the result is a compromise, and the pattern
+  score drops.
+* ERA5 is smoother than radar. For km-scale convection, retrain on km-scale observations.
+
+## Running
+
+**Colab:** open a notebook, choose a T4 GPU runtime, set `GITHUB_USER`, then run all cells. You can also upload
+`pattern-sim.zip` to `/content` instead of cloning.
+
+**Locally:**
 
 ```bash
 pip install -r requirements.txt
-python -m pytest -q tests                      # 30 s CPU self-test, no download
-python -m patsim.train --steps 6000 --out_dir runs/r18
+python -m pytest -q tests
+python -m precipsim.train --data_path era5_ea.npz --steps 8000
 ```
-
-**Use a trained model:**
-
-```python
-from patsim import PairScorer
-scorer = PairScorer.from_checkpoint("runs/r18/patsim.pt")      # d0=..., tau=... to reshape scores
-r = scorer.score("cat1.jpg", "cat2.jpg")                        # paths, PIL, numpy (H,W[,C]) or tensors
-print(r["pattern"], r["location"], r["scale"], r["dx"], r["dy"], r["scale_ratio"])
-```
-
-Inputs of any size and aspect ratio are letterboxed to 160×160. Single-channel numpy
-arrays (e.g. a 2D physical field) are min-max normalised and repeated to 3 channels.
-
-## Putting it on GitHub
-
-Without git installed: create an empty repo `pattern-sim` on github.com → *Add file → Upload files* →
-drag in the contents of this folder → commit. With git:
-
-```bash
-git init -b main && git add . && git commit -m "pattern-sim" && git remote add origin https://github.com/YOUR_GITHUB_ID/pattern-sim.git && git push -u origin main
-```
-
-Keep the repo public, or the plain `git clone` in the notebook will need a token. You can also skip
-GitHub and upload `pattern-sim.zip` to `/content` in Colab; the notebook unzips it automatically.
-
-## Extending
-
-* **Other objects:** any dataset with masks or boxes works. Write a loader that returns `make_tile` samples.
-* **More scores:** add a label in `PairSynth.sample` (e.g. rotation angle or intensity scaling), a head
-  in `PatSimNet.encode`, and a score in `scores.py`.
-* **Scientific 2D fields:** the same pattern / location / scale split resembles object-based
-  verification scores (e.g. SAL, MODE). To use it there, train on fields with known objects instead of pets.
-* **Bigger backbone:** swap ResNet-18 for ResNet-50 in `model.py` (layer channel counts change to 1024/2048).
 
 ## Files
 
 ```
-patsim/data.py      Oxford-IIIT Pet → tile bank; GPU pair renderer with exact labels
-patsim/model.py     PatSimNet (Siamese ResNet-18 + mask / heat / size / embedding heads)
-patsim/scores.py    score definitions (d0, tau)
-patsim/train.py     training loop + CLI (Config dataclass)
-patsim/evaluate.py  fixed-seed test metrics (MAE per score, centre error px, size error %, AUCs)
-patsim/infer.py     PairScorer for arbitrary images
-patsim/viz.py       plotting helpers
-tests/              CPU smoke tests on fake data
-notebooks/          Colab notebook
+precipsim/geometry.py   similarity transforms + warping (one convention everywhere)
+precipsim/data.py       ERA5 download, FieldBank, FieldPairSynth (synthetic forecasts, exact labels)
+precipsim/model.py      RegNet: correlation-volume registration + comparison CNN
+precipsim/classic.py    baselines: exhaustive search + phase correlation, SAL-style moments
+precipsim/scores.py     score definitions (d0, rot0_deg)
+precipsim/train.py      training loop + CLI
+precipsim/evaluate.py   fixed-seed test metrics, network vs. baselines
+precipsim/infer.py      FieldScorer for arbitrary obs/forecast arrays
+precipsim/viz.py        plots
+patsim/                 cat/dog prototype (object boxes)
+tests/                  CPU self-tests on fake data
+notebooks/              Colab notebooks
 ```

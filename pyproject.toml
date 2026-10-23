@@ -3,11 +3,14 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "patsim"
-version = "0.1.0"
-description = "Learned pattern / location / scale similarity between two 2D images"
+name = "pattern-sim"
+version = "0.2.0"
+description = "Learned pattern / location / scale / rotation / intensity similarity between two 2D fields"
 requires-python = ">=3.9"
-dependencies = ["torch>=2.3", "torchvision>=0.18", "numpy", "pillow>=9.1", "matplotlib", "tqdm"]
+dependencies = ["torch>=2.3", "torchvision>=0.18", "numpy", "pillow>=9.1", "matplotlib", "tqdm", "pandas"]
+
+[project.optional-dependencies]
+era5 = ["xarray", "zarr>=3", "gcsfs"]
 
 [tool.setuptools]
-packages = ["patsim"]
+packages = ["patsim", "precipsim"]
