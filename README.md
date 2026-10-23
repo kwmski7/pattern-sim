@@ -74,6 +74,15 @@ scorer.score_batch(obs_stack, fcst_stack)                  # many cases at once 
 To adapt to your own grid (radar, GPM, KIM), use `FieldBank.from_array(obs_mmh, time=...)` and then `train(...)`.
 No labels are needed.
 
+**Saved models.** Training saves `out_dir/precipsim.pt` at every evaluation. `prepare_model(cfg, train_bank, test_bank, mode=...)`
+(the notebook's training cell, or `python -m precipsim.train --mode ...`) handles a saved model in one of these ways:
+* `"use"`: load it and skip training.
+* `"continue"`: train `cfg.steps` more steps starting from its weights.
+* `"scratch"`: train a new model.
+* `"ask"`: show its summary and prompt for one of the above.
+
+Before `"continue"` or `"scratch"` overwrites the saved model, a dated copy `precipsim_YYYYmmdd-HHMMSS.pt` is kept.
+
 ### Limitations
 
 * Rotation and zoom are ill-defined for round or scattered rain. The uncertainty outputs show this.

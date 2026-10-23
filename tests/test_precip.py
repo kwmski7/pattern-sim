@@ -17,7 +17,7 @@ from precipsim.evaluate import evaluate, summary_table  # noqa: E402
 from precipsim.geometry import resample, sim_matrix, sim_params  # noqa: E402
 from precipsim.infer import FieldScorer  # noqa: E402
 from precipsim.scores import SCORES  # noqa: E402
-from precipsim.train import Config, train  # noqa: E402
+from precipsim.train import Config, describe_checkpoint, prepare_model, train  # noqa: E402
 from precipsim.viz import show_pairs, show_result  # noqa: E402
 
 
@@ -98,3 +98,21 @@ def test_train_evaluate_and_score(bank, tmp_path):
     with pytest.raises(ValueError):
         scorer.score(obs, obs[:40])
     show_result(r, title="test")
+
+
+def test_reuse_saved_model(bank, tmp_path):
+    cfg = Config(out_dir=str(tmp_path), canvas=64, steps=2, batch_size=4, eval_every=2, eval_pairs=8,
+                 log_every=2, pretrained=False, amp=False, warmup=2)
+    assert describe_checkpoint(os.path.join(tmp_path, "precipsim.pt")) is None
+    _, h1 = prepare_model(cfg, bank, bank, mode="use", device="cpu")  # nothing saved yet -> trains
+    assert [h["step"] for h in h1] == [2]
+    _, h2 = prepare_model(cfg, bank, bank, mode="continue", device="cpu")
+    assert [h["step"] for h in h2] == [2, 4]
+    model, h3 = prepare_model(cfg, mode="use", device="cpu")  # no data needed to reuse
+    assert [h["step"] for h in h3] == [2, 4] and not model.training
+    backups = [f for f in os.listdir(tmp_path) if f.startswith("precipsim_") and f.endswith(".pt")]
+    assert backups  # dated copy of the model that "continue" overwrote
+    _, h4 = prepare_model(cfg, bank, bank, mode="scratch", device="cpu")
+    assert [h["step"] for h in h4] == [2]
+    with pytest.raises(ValueError):
+        prepare_model(cfg, mode="later")
